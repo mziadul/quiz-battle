@@ -21,7 +21,12 @@ class QuizChallengeSentEvent implements ShouldBroadcastNow
 
     public function broadcastOn(): array
     {
-        // নির্দিষ্ট টার্গেট প্লেয়ারের প্রাইভেট চ্যানেলে ব্রডকাস্ট হবে
+        \Log::info('--- REVERB EVENT DISPATCHING ---', [
+            'target_user_id' => $this->targetUserId,
+            'channel' => 'App.Models.User.' . $this->targetUserId,
+            'game_session_id' => $this->gameSessionId
+        ]);
+
         return [
             new PrivateChannel('App.Models.User.' . $this->targetUserId),
         ];

@@ -8,13 +8,16 @@ Broadcast::channel('App.Models.User.{id}', function ($user, $id) {
     return (int) $user->id === (int) $id;
 });
 
-Broadcast::channel('online-users', function (User $user) {
-    return [
-        'id' => $user->id,
-        'name' => $user->name,
-        'username' => $user->username,
-        'email' => $user->email,
-    ];
+Broadcast::channel('online-users', function ($user) {
+    if ($user) {
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+            'username' => $user->username ?? $user->email,
+            'email' => $user->email,
+        ];
+    }
+    return false;
 });
 
 Broadcast::channel('game-session.{sessionId}', function ($user, int $sessionId) {

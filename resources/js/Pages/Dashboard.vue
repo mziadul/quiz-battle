@@ -17,32 +17,48 @@ const challengeStatus = ref('');
 const incomingChallenge = ref(null);
 
 onMounted(() => {
-    // 1. Online Users Presence Channel
+    console.log('--- AUTH USER ID ---:', authUser.id);
+
+    if (!window.Echo) return;
+
+    // 1. Active Users Presence Channel
     window.Echo.join('online-users')
-        .here((users) => { onlineUsers.value = users; })
+        .here((users) => { 
+            console.log('--- ONLINE USERS LIST ---:', users);
+            onlineUsers.value = users; 
+        })
         .joining((user) => {
-            if (!onlineUsers.value.some(u => u.id === user.id)) onlineUsers.value.push(user);
+            console.log('--- USER JOINED ---:', user);
+            if (!onlineUsers.value.some(u => u.id === user.id)) {
+                onlineUsers.value.push(user);
+            }
         })
         .leaving((user) => {
+            console.log('--- USER LEFT ---:', user);
             onlineUsers.value = onlineUsers.value.filter(u => u.id !== user.id);
+        })
+        .error((error) => {
+            console.error('--- PRESENCE CHANNEL ERROR ---:', error);
         });
 
-    // 2. Private Channel (Listen for incoming challenges and match acceptances)
-    window.Echo.private(`App.Models.User.${authUser.id}`)
-        .listen('.QuizChallengeReceived', (data) => {
-            incomingChallenge.value = data;
-        })
-        .listen('.QuizChallengeAccepted', (data) => {
-            challengeStatus.value = '⚔️ Challenge Accepted! Redirecting to Match Arena...';
-            
-            // Hard Redirect Player 1 (Challenger) to ensure clean socket connection
-            window.location.href = `/quiz/match/${data.gameSessionId}`;
-        });
+    // 2. Private Channel (চ্যালেঞ্জের জন্য)
+    const privateChannel = window.Echo.private(`App.Models.User.${authUser.id}`);
+
+    privateChannel.subscribed(() => {
+        console.log(`--- SUCCESS: Subscribed to App.Models.User.${authUser.id} ---`);
+    });
+
+    privateChannel.listen('.QuizChallengeReceived', (data) => {
+        console.log('--- CHALLENGE RECEIVED ---:', data);
+        incomingChallenge.value = data;
+    });
 });
 
 onUnmounted(() => {
-    window.Echo.leave('online-users');
-    window.Echo.leave(`App.Models.User.${authUser.id}`);
+    if (window.Echo) {
+        window.Echo.leave('online-users');
+        window.Echo.leave(`App.Models.User.${authUser.id}`);
+    }
 });
 
 const handleSearch = async () => {
@@ -215,7 +231,7 @@ const declineChallenge = async () => {
                 <div class="text-4xl mb-2">⚔️</div>
                 <h3 class="text-xl font-bold text-gray-900">Quiz Challenge!</h3>
                 <p class="text-gray-600 text-sm mt-2">
-                    <strong>{{ incomingChallenge.challenger.name }}</strong> is challenging you to a quiz battle!
+                    <strong>{{ incomingChallenge.challenger?.name || 'A player' }}</strong> is challenging you to a quiz battle!
                 </p>
 
                 <div class="mt-6 flex gap-3 justify-center">
