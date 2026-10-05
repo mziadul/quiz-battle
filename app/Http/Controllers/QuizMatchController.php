@@ -109,11 +109,11 @@ class QuizMatchController extends Controller
         $session = GameSession::findOrFail($validated['session_id']);
 
         if ($validated['status'] === 'accepted') {
-            // Cleanup any previous answers/session questions if retried
+            // Cleanup previous session data
             GameAnswer::where('game_session_id', $session->id)->delete();
             DB::table('game_session_questions')->where('game_session_id', $session->id)->delete();
 
-            // Lock 5 random questions permanently for this match session
+            // Lock 5 random questions
             $randomQuestions = Question::inRandomOrder()->limit(5)->get();
             foreach ($randomQuestions as $index => $q) {
                 DB::table('game_session_questions')->insert([
@@ -125,16 +125,25 @@ class QuizMatchController extends Controller
                 ]);
             }
 
-            // Set session active with start timestamp
+            // Set session active
             $session->update([
                 'status' => 'active',
                 'started_at' => now(),
             ]);
 
+            // 🚨 Challenger ID (Player 1) বের করা
+            $challengerId = (int) $session->player1_id;
+
+            Log::info('--- BROADCASTING ACCEPTED EVENT TO PLAYER 1 ---', [
+                'session_id' => $session->id,
+                'challenger_id' => $challengerId
+            ]);
+
             try {
-                broadcast(new QuizChallengeAcceptedEvent($session->id, $session->player1_id));
+                // 🚨 dispatch() দিয়ে সরাসরি রিভার্বে ইভেন্ট পুশ
+                QuizChallengeAcceptedEvent::dispatch((int) $session->id, $challengerId);
             } catch (Exception $e) {
-                Log::error('Accept Broadcast Error: '.$e->getMessage());
+                Log::error('Accept Broadcast Error: ' . $e->getMessage());
             }
 
             return response()->json([

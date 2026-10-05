@@ -41,16 +41,26 @@ onMounted(() => {
             console.error('--- PRESENCE CHANNEL ERROR ---:', error);
         });
 
-    // 2. Private Channel (চ্যালেঞ্জের জন্য)
+    // 2. Private Channel Setup (Listen for incoming challenge & acceptance)
     const privateChannel = window.Echo.private(`App.Models.User.${authUser.id}`);
 
     privateChannel.subscribed(() => {
         console.log(`--- SUCCESS: Subscribed to App.Models.User.${authUser.id} ---`);
     });
 
+    // 📩 Listen for Incoming Challenge (For Player 2 - Receiver)
     privateChannel.listen('.QuizChallengeReceived', (data) => {
         console.log('--- CHALLENGE RECEIVED ---:', data);
         incomingChallenge.value = data;
+    });
+
+    // ⚔️ Listen for Challenge Accepted (For Player 1 - Challenger)
+    privateChannel.listen('.QuizChallengeAccepted', (data) => {
+        console.log('--- CHALLENGE ACCEPTED EVENT RECEIVED BY PLAYER 1 ---:', data);
+        challengeStatus.value = '⚔️ Challenge Accepted! Redirecting to Match Arena...';
+
+        // Player 1 (Challenger)-কে স্বয়ংক্রিয়ভাবে গেম পেজে রিডাইরেক্ট করে দেওয়া
+        window.location.href = `/quiz/match/${data.gameSessionId}`;
     });
 });
 
@@ -84,7 +94,7 @@ const handleSearch = async () => {
 
 const isUserOnline = (userId) => onlineUsers.value.some(u => u.id === userId);
 
-// Send Challenge
+// Send Challenge Function
 const sendChallenge = async (user) => {
     challengeStatus.value = `Sending challenge to ${user.name}...`;
 
