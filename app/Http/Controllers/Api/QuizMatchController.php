@@ -23,16 +23,48 @@ class QuizMatchController extends Controller
                 return response()->json(['status' => 'ERROR', 'message' => 'Session not found'], 404);
             }
 
+            // ১. যদি ম্যাচ আগেই কমপ্লিট হয়ে থাকে
+            if ($session->status === 'completed') {
+                return response()->json([
+                    'status' => 'SUCCESS',
+                    'session_status' => 'completed',
+                    'results' => [
+                        'winner_id' => $session->winner_id,
+                        'player1_score' => $session->player1_score,
+                        'player2_score' => $session->player2_score,
+                    ],
+                ]);
+            }
+
+            // ২. Elapsed Time (অতিক্রান্ত সময়) হিসাব করা
+            $startedAt = $session->started_at ? \Carbon\Carbon::parse($session->started_at) : now();
+            $elapsedSeconds = (int) $startedAt->diffInSeconds(now());
+            $totalMatchTime = 50; // ৫টি প্রশ্ন * ১০ সেকেন্ড = ৫০ সেকেন্ড
+
+            // ৫০ সেকেন্ড পার হয়ে গেলে অটোমেটিক গেম ওভার
+            if ($elapsedSeconds >= $totalMatchTime) {
+                return response()->json([
+                    'status' => 'SUCCESS',
+                    'session_status' => 'completed',
+                    'results' => [
+                        'winner_id' => $session->winner_id,
+                        'player1_score' => $session->player1_score,
+                        'player2_score' => $session->player2_score,
+                    ],
+                ]);
+            }
+
+            // ৩. অতিক্রান্ত সময়ের ওপর ভিত্তি করে বর্তমান প্রশ্ন ও টাইমার বের করা
+            $questionIndex = (int) floor($elapsedSeconds / 10); // যেমন: ১৮ সেকেন্ড হলে Index = 1 (2nd question)
+            $remainingSecForCurrentQ = 10 - ($elapsedSeconds % 10); // ১৮ সেকেন্ড হলে Remaining = 2 sec
+
+            // প্রশ্নসমূহ ফেচ করা
             $questionIds = DB::table('game_session_questions')
                 ->where('game_session_id', $sessionId)
                 ->orderBy('sort_order', 'asc')
                 ->pluck('question_id');
 
-            if ($questionIds->isEmpty()) {
-                $questions = Question::where('category_id', $session->category_id)->inRandomOrder()->limit(5)->get();
-            } else {
-                $questions = Question::whereIn('id', $questionIds)->get();
-            }
+            $questions = Question::whereIn('id', $questionIds)->get();
 
             $formattedQuestions = $questions->map(function ($q) {
                 return [
@@ -46,8 +78,11 @@ class QuizMatchController extends Controller
             return response()->json([
                 'status' => 'SUCCESS',
                 'session_status' => $session->status,
+                'current_index' => $questionIndex,
+                'remaining_seconds' => $remainingSecForCurrentQ,
                 'questions' => $formattedQuestions,
             ]);
+
         } catch (Exception $e) {
             return response()->json(['status' => 'ERROR', 'message' => $e->getMessage()], 500);
         }

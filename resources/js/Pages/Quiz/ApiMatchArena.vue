@@ -64,19 +64,45 @@ const loadMatchData = async () => {
     try {
         const client = getApiClient();
         const response = await client.get(`/api/quiz/questions/${props.sessionId}`);
+        
         if (response.data.status === 'SUCCESS') {
-            questions.value = response.data.questions;
-            
             if (response.data.session_status === 'completed') {
                 matchResults.value = response.data.results;
                 gameState.value = 'FINISHED';
             } else {
-                startMatchCountdown();
+                questions.value = response.data.questions;
+                
+                // 🔑 রিফ্রেশ দেওয়া হলে ব্যাকএন্ডের ইনডেক্স ও অবশিষ্ট টাইমার থেকে কন্টিনিউ হবে
+                if (response.data.current_index !== undefined) {
+                    currentQuestionIndex.value = response.data.current_index;
+                    timer.value = response.data.remaining_seconds;
+                    
+                    gameState.value = 'PLAYING';
+                    startQuestionTimer(response.data.remaining_seconds);
+                } else {
+                    startMatchCountdown();
+                }
             }
         }
     } catch (error) {
         console.error('Error loading match:', error);
     }
+};
+
+// ⏱️ টাইমার ফাংশনে কাস্টম রিমেইনিং সেকেন্ড এক্সেপ্ট করা
+const startQuestionTimer = (initialTimer = 10) => {
+    clearInterval(timerInterval);
+    timer.value = initialTimer;
+    selectedOption.value = null;
+    isOptionLocked.value = false;
+
+    timerInterval = setInterval(() => {
+        timer.value--;
+        if (timer.value <= 0) {
+            clearInterval(timerInterval);
+            handleNextQuestion();
+        }
+    }, 1000);
 };
 
 const startMatchCountdown = () => {
@@ -87,23 +113,6 @@ const startMatchCountdown = () => {
             clearInterval(interval);
             gameState.value = 'PLAYING';
             startQuestionTimer();
-        }
-    }, 1000);
-};
-
-// ⏱️ ১০ সেকেন্ড টাইমার
-const startQuestionTimer = () => {
-    clearInterval(timerInterval);
-    timer.value = 10;
-    selectedOption.value = null;
-    isOptionLocked.value = false;
-
-    timerInterval = setInterval(() => {
-        timer.value--;
-        if (timer.value <= 0) {
-            clearInterval(timerInterval);
-            // ১০ সেকেন্ডে উত্তর না দিলে অটো নেক্সট
-            handleNextQuestion();
         }
     }, 1000);
 };
