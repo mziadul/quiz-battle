@@ -11,14 +11,22 @@ class Question extends Model
 
     protected $fillable = [
         'category_id',
-        'question_text',
+        'question',
         'options',
-        'correct_option',
-        'base_point',
-        'time_limit_sec',
+        'correct_answer',
+        'difficulty',
+        'language',
+        'status',
+        'is_validated',
     ];
 
     protected $casts = [
-        'options' => 'array',
+        'options' => 'array', // JSON options automatic array-te cast hobe
+        'is_validated' => 'boolean',
     ];
+
+    public function category()
+    {
+        return $this->belongsTo(Category::class);
+    }
 }
