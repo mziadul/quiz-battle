@@ -24,6 +24,13 @@ class QuizMatchFinishedEvent implements ShouldBroadcastNow
         ];
     }
 
+    public function broadcastWith(): array
+    {
+        return [
+            'results' => $this->results,
+        ];
+    }
+
     public function broadcastAs(): string
     {
         return 'QuizMatchFinished';

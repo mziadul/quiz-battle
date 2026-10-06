@@ -7,6 +7,8 @@ window.axios.defaults.headers.common["X-Requested-With"] = "XMLHttpRequest";
 
 window.Pusher = Pusher;
 
+const getBearerToken = () => localStorage.getItem("auth_token");
+
 window.Echo = new Echo({
     broadcaster: "reverb",
     key: import.meta.env.VITE_REVERB_APP_KEY,
@@ -15,4 +17,12 @@ window.Echo = new Echo({
     wssPort: import.meta.env.VITE_REVERB_PORT ? Number(import.meta.env.VITE_REVERB_PORT) : 8083,
     forceTLS: false,
     enabledTransports: ["ws", "wss"],
+
+    authEndpoint: "/api/broadcasting/auth",
+    auth: {
+        headers: {
+            Authorization: getBearerToken() ? `Bearer ${getBearerToken()}` : "",
+            Accept: "application/json",
+        },
+    },
 });

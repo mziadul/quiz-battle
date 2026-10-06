@@ -13,9 +13,15 @@ return new class extends Migration
     {
         Schema::create('game_sessions', function (Blueprint $table) {
             $table->id();
+            $table->foreignId('category_id')->constrained('categories')->cascadeOnDelete();
             $table->foreignId('player1_id')->constrained('users')->cascadeOnDelete();
-            $table->foreignId('player2_id')->constrained('users')->cascadeOnDelete();
-            $table->enum('status', ['pending', 'active', 'completed', 'cancelled'])->default('pending');
+            $table->foreignId('player2_id')->nullable()->constrained('users')->cascadeOnDelete();
+            
+            // 🎯 স্কোরের জন্য কলাম দুটি যুক্ত করা হলো
+            $table->integer('player1_score')->nullable();
+            $table->integer('player2_score')->nullable();
+
+            $table->enum('status', ['waiting', 'pending', 'active', 'completed', 'cancelled'])->default('waiting');
             $table->foreignId('winner_id')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamp('started_at')->nullable();
             $table->timestamp('ended_at')->nullable();
