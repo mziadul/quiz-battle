@@ -47,6 +47,7 @@ Route::middleware(['auth:sanctum'])->prefix('quiz')->group(function () {
 
     Route::get('/questions/{session}', [QuizMatchController::class, 'getMatchQuestions']);
     Route::post('/submit-answers/{session}', [QuizMatchController::class, 'submitAnswers']);
+    Route::get('/recent-opponents', [QuizMatchController::class, 'getRecentOpponents']);
 });
 
 Broadcast::routes(['middleware' => ['auth:sanctum']]);

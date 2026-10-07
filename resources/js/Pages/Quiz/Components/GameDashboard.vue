@@ -12,7 +12,9 @@ const emit = defineEmits(['logout']);
 const userPoints = ref(5840);
 const userLevel = ref(12);
 
-// Modal & Matchmaking States
+// Dynamic Live States
+const onlineUsersList = ref([]); // Store all active online users array
+const recentOpponents = ref([]);
 const categories = ref([]);
 const showCategoryModal = ref(false);
 const isWaitingOpponent = ref(false);
@@ -20,21 +22,51 @@ const isLoading = ref(false);
 const activeCategoryId = ref(null);
 let pollInterval = null;
 
-// Axios Interceptor for Sanctum Token Setup
 onMounted(() => {
     const token = localStorage.getItem('auth_token');
     if (token) {
         axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
     }
+
+    // 🟢 1. Presence Channel Listener
+    if (window.Echo) {
+        window.Echo.join('online-users')
+            .here((users) => {
+                onlineUsersList.value = users;
+            })
+            .joining((user) => {
+                onlineUsersList.value.push(user);
+            })
+            .leaving((user) => {
+                onlineUsersList.value = onlineUsersList.value.filter(u => u.id !== user.id);
+            });
+    }
+
+    fetchRecentOpponents();
 });
 
-// 🔑 Helper check for any match status
+// Helper check to verify if a user is online right now
+const isUserOnline = (userId) => {
+    return onlineUsersList.value.some(u => Number(u.id) === Number(userId));
+};
+
+// 👥 Fetch Recent Opponents from Database
+const fetchRecentOpponents = async () => {
+    try {
+        const res = await axios.get('/api/quiz/recent-opponents');
+        if (res.data?.opponents) {
+            recentOpponents.value = res.data.opponents;
+        }
+    } catch (err) {
+        console.error('Fetch recent opponents error:', err);
+    }
+};
+
 const isMatchReady = (resData) => {
     const status = resData?.status;
     return status === 'MATCH_FOUND' || status === 'MATCHED' || status === 'SUCCESS';
 };
 
-// 1. Fetch Categories
 const openCategoryModal = async () => {
     showCategoryModal.value = true;
     if (categories.value.length === 0) {
@@ -50,7 +82,6 @@ const openCategoryModal = async () => {
     }
 };
 
-// 2. Start Matchmaking / Join Queue
 const selectCategoryAndJoin = async (categoryId) => {
     showCategoryModal.value = false;
     isWaitingOpponent.value = true;
@@ -63,13 +94,11 @@ const selectCategoryAndJoin = async (categoryId) => {
 
         const sessionId = res.data?.session_id || res.data?.session?.id;
 
-        // ২য় প্লেয়ার যদি সাথে সাথে ম্যাচ পেয়ে যায়
         if (isMatchReady(res.data) && sessionId) {
             stopPolling();
             isWaitingOpponent.value = false;
             router.visit(`/app/quiz/match/${sessionId}`);
         } else {
-            // ১ম প্লেয়ার ওয়েটিং-এ থাকলে পোলিং শুরু হবে
             startPolling(categoryId);
         }
     } catch (err) {
@@ -79,7 +108,6 @@ const selectCategoryAndJoin = async (categoryId) => {
     }
 };
 
-// 3. Fast & Reliable Polling Backup while Waiting (1.2 seconds)
 const startPolling = (categoryId) => {
     stopPolling();
     pollInterval = setInterval(async () => {
@@ -90,7 +118,6 @@ const startPolling = (categoryId) => {
 
             const sessionId = res.data?.session_id || res.data?.session?.id;
 
-            // ২য় প্লেয়ার জয়েন করার পর ১ম প্লেয়ারের পোলিং হিট হিট হলেই সাথে সাথে অ্যারেনায় পাঠাবে
             if (isMatchReady(res.data) && sessionId) {
                 stopPolling();
                 isWaitingOpponent.value = false;
@@ -99,10 +126,9 @@ const startPolling = (categoryId) => {
         } catch (err) {
             console.error('Polling Error:', err);
         }
-    }, 1200); // 👈 ১২০০ms (১.২ সে.) দেওয়া হয়েছে দ্রুত সিঙ্ক হওয়ার জন্য
+    }, 1200);
 };
 
-// 4. Cancel Queue
 const cancelQueue = async () => {
     stopPolling();
     isWaitingOpponent.value = false;
@@ -122,6 +148,9 @@ const stopPolling = () => {
 
 onUnmounted(() => {
     stopPolling();
+    if (window.Echo) {
+        window.Echo.leave('online-users');
+    }
 });
 </script>
 
@@ -169,10 +198,12 @@ onUnmounted(() => {
 
         <!-- Content Area -->
         <div class="p-6 space-y-4">
-            <!-- Quick Match Card (Opens Category Modal) -->
+            <!-- Quick Match Card -->
             <div @click="openCategoryModal" class="bg-gradient-to-r from-indigo-600 to-indigo-500 rounded-3xl p-5 text-white shadow-xl relative overflow-hidden group cursor-pointer">
                 <div class="relative z-10 space-y-3">
-                    <span class="px-2.5 py-0.5 rounded-full bg-indigo-400/30 backdrop-blur-md text-[10px] font-bold tracking-wide">🟢 260 online</span>
+                    <span class="px-2.5 py-0.5 rounded-full bg-indigo-400/30 backdrop-blur-md text-[10px] font-bold tracking-wide">
+                        🟢 {{ onlineUsersList.length }} online
+                    </span>
                     <div>
                         <p class="text-[10px] uppercase tracking-wider font-extrabold text-indigo-200">PLAY NOW</p>
                         <h3 class="text-xl font-black">Quick Match</h3>
@@ -186,10 +217,6 @@ onUnmounted(() => {
             <!-- Battle a Friend Card -->
             <div class="bg-gradient-to-r from-lime-400 to-lime-300 rounded-3xl p-5 text-slate-900 shadow-lg relative overflow-hidden group cursor-pointer">
                 <div class="relative z-10 space-y-3">
-                    <div class="flex space-x-1">
-                        <span class="w-6 h-6 rounded-full bg-pink-400 text-white font-black text-[10px] flex items-center justify-center border-2 border-lime-300">TA</span>
-                        <span class="w-6 h-6 rounded-full bg-blue-500 text-white font-black text-[10px] flex items-center justify-center border-2 border-lime-300">RF</span>
-                    </div>
                     <div>
                         <p class="text-[10px] uppercase tracking-wider font-extrabold text-slate-700">PLAY TOGETHER</p>
                         <h3 class="text-xl font-black text-slate-900">Battle a Friend</h3>
@@ -200,33 +227,35 @@ onUnmounted(() => {
                 <div class="absolute -right-2 -bottom-2 text-6xl opacity-30 group-hover:scale-110 transition-transform">👥</div>
             </div>
 
-            <!-- Friends Online -->
+            <!-- 👥 Real Recent Opponents Section with LIVE STATUS DOT -->
             <div class="space-y-3 pt-2">
                 <div class="flex justify-between items-center">
-                    <span class="text-xs font-black text-slate-400 uppercase tracking-wider">Friends online now</span>
-                    <button class="text-xs font-bold text-indigo-600">See all</button>
+                    <span class="text-xs font-black text-slate-400 uppercase tracking-wider">Recent Battles</span>
                 </div>
 
-                <div class="grid grid-cols-2 gap-3">
-                    <div class="p-3 bg-white rounded-2xl border border-slate-100 flex items-center space-x-3 shadow-sm">
-                        <div class="relative">
-                            <div class="w-10 h-10 rounded-xl bg-pink-500 text-white font-black text-xs flex items-center justify-center">TA</div>
-                            <span class="w-3 h-3 bg-emerald-500 border-2 border-white rounded-full absolute -bottom-0.5 -right-0.5"></span>
-                        </div>
-                        <div class="overflow-hidden">
-                            <p class="text-xs font-bold text-slate-800 truncate">Tania</p>
-                            <p class="text-[10px] text-emerald-600 font-medium">Online</p>
-                        </div>
-                    </div>
+                <div v-if="recentOpponents.length === 0" class="text-xs text-slate-400 italic">
+                    No recent opponents yet. Play a Quick Match!
+                </div>
 
-                    <div class="p-3 bg-white rounded-2xl border border-slate-100 flex items-center space-x-3 shadow-sm">
+                <div v-else class="grid grid-cols-2 gap-3">
+                    <div v-for="opp in recentOpponents.slice(0, 2)" :key="opp.id" class="p-3 bg-white rounded-2xl border border-slate-100 flex items-center space-x-3 shadow-sm">
+                        <!-- Avatar & Status Dot -->
                         <div class="relative">
-                            <div class="w-10 h-10 rounded-xl bg-blue-500 text-white font-black text-xs flex items-center justify-center">RF</div>
-                            <span class="w-3 h-3 bg-amber-500 border-2 border-white rounded-full absolute -bottom-0.5 -right-0.5"></span>
+                            <div class="w-10 h-10 rounded-xl bg-indigo-600 text-white font-black text-xs flex items-center justify-center">
+                                {{ opp.avatar_text }}
+                            </div>
+                            <!-- 🟢 Green Dot if Online, ⚪ Gray if Offline -->
+                            <span 
+                                :class="isUserOnline(opp.id) ? 'bg-emerald-500' : 'bg-slate-300'"
+                                class="w-3 h-3 border-2 border-white rounded-full absolute -bottom-0.5 -right-0.5"
+                            ></span>
                         </div>
+
                         <div class="overflow-hidden">
-                            <p class="text-xs font-bold text-slate-800 truncate">Rafi</p>
-                            <p class="text-[10px] text-amber-600 font-medium">In battle</p>
+                            <p class="text-xs font-bold text-slate-800 truncate">{{ opp.name }}</p>
+                            <p :class="isUserOnline(opp.id) ? 'text-emerald-600' : 'text-slate-400'" class="text-[10px] font-medium">
+                                {{ isUserOnline(opp.id) ? 'Online' : 'Offline' }}
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -241,7 +270,7 @@ onUnmounted(() => {
             <button class="flex flex-col items-center space-y-1 text-slate-400 hover:text-indigo-600"><span class="text-lg">👤</span><span class="text-[10px] font-bold">Profile</span></button>
         </div>
 
-        <!-- 🎯 1. CATEGORY SELECTION MODAL -->
+        <!-- CATEGORY MODAL -->
         <div v-if="showCategoryModal" class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center">
             <div class="bg-white w-full rounded-t-3xl p-6 space-y-4 animate-in slide-in-from-bottom duration-200">
                 <div class="flex justify-between items-center">
@@ -267,7 +296,7 @@ onUnmounted(() => {
             </div>
         </div>
 
-        <!-- ⚔️ 2. SEARCHING FOR OPPONENT MODAL -->
+        <!-- SEARCHING MODAL -->
         <div v-if="isWaitingOpponent" class="absolute inset-0 bg-slate-900/80 backdrop-blur-md z-50 flex items-center justify-center p-6">
             <div class="bg-white rounded-3xl p-6 text-center space-y-4 w-full max-w-xs shadow-2xl animate-in zoom-in-95 duration-200">
                 <div class="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full mx-auto flex items-center justify-center text-2xl font-black animate-spin">

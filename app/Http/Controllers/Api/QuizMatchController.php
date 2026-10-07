@@ -353,4 +353,46 @@ class QuizMatchController extends Controller
             ]);
         }
     }
+
+    public function getRecentOpponents(Request $request): JsonResponse
+    {
+        try {
+            $userId = auth()->id();
+
+            // ইউজার যে যে সেশনে প্লেয়ার ১ বা ২ ছিল সেগুলো থেকে অপোনেন্ট আইডি বের করা
+            $sessions = GameSession::where(function ($q) use ($userId) {
+                $q->where('player1_id', $userId)->orWhere('player2_id', $userId);
+            })
+            ->whereNotNull('player2_id')
+            ->latest('updated_at')
+            ->limit(20)
+            ->get();
+
+            $opponentIds = [];
+            foreach ($sessions as $session) {
+                $oppId = ($session->player1_id == $userId) ? $session->player2_id : $session->player1_id;
+                if ($oppId && !in_array($oppId, $opponentIds)) {
+                    $opponentIds[] = $oppId;
+                }
+            }
+
+            $opponents = \App\Models\User::whereIn('id', array_slice($opponentIds, 0, 5))
+                ->select('id', 'name', 'email')
+                ->get()
+                ->map(function ($u) {
+                    return [
+                        'id' => $u->id,
+                        'name' => $u->name,
+                        'avatar_text' => strtoupper(substr($u->name, 0, 2)),
+                    ];
+                });
+
+            return response()->json([
+                'status' => 'SUCCESS',
+                'opponents' => $opponents
+            ]);
+        } catch (Exception $e) {
+            return response()->json(['status' => 'ERROR', 'message' => $e->getMessage()], 500);
+        }
+    }
 }
