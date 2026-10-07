@@ -18,10 +18,18 @@ const handleLogin = async () => {
             password: password.value
         });
 
-        if (response.data.access_token) {
-            localStorage.setItem('auth_token', response.data.access_token);
-            localStorage.setItem('user_data', JSON.stringify(response.data.user));
-            emit('login-success', response.data.user);
+        // 🔑 'token' এবং 'user' চেক করা হচ্ছে
+        const token = response.data.token;
+        const user = response.data.user;
+
+        if (token && user) {
+            localStorage.setItem('auth_token', token);
+            localStorage.setItem('user_data', JSON.stringify(user));
+            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+            
+            emit('login-success', user);
+        } else {
+            authError.value = 'Invalid login response structure.';
         }
     } catch (err) {
         authError.value = err.response?.data?.message || 'Login failed. Please check credentials.';

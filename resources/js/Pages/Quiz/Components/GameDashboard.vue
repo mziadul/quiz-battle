@@ -12,11 +12,18 @@ const emit = defineEmits(['logout']);
 const userPoints = ref(5840);
 const userLevel = ref(12);
 
-// Dynamic Live States
-const onlineUsersList = ref([]); // Store all active online users array
+// Dynamic Reactive States
+const onlineUsersList = ref([]);
 const recentOpponents = ref([]);
 const categories = ref([]);
+
 const showCategoryModal = ref(false);
+const showFriendBattleModal = ref(false);
+const incomingChallenge = ref(null);
+
+const friendEmail = ref('');
+const selectedCategoryId = ref(null);
+
 const isWaitingOpponent = ref(false);
 const isLoading = ref(false);
 const activeCategoryId = ref(null);
@@ -28,29 +35,45 @@ onMounted(() => {
         axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
     }
 
-    // 🟢 1. Presence Channel Listener
     if (window.Echo) {
+        // 🟢 Presence Channel for Online Users
         window.Echo.join('online-users')
             .here((users) => {
                 onlineUsersList.value = users;
             })
             .joining((user) => {
-                onlineUsersList.value.push(user);
+                const exists = onlineUsersList.value.some(u => String(u.id) === String(user.id));
+                if (!exists) {
+                    onlineUsersList.value.push(user);
+                }
             })
             .leaving((user) => {
-                onlineUsersList.value = onlineUsersList.value.filter(u => u.id !== user.id);
+                onlineUsersList.value = onlineUsersList.value.filter(u => String(u.id) !== String(user.id));
+            })
+            .error((error) => {
+                console.error('Presence Channel Error:', error);
             });
+
+        // 📩 Private Channel for Incoming Challenges
+        if (props.user && props.user.id) {
+            window.Echo.private(`App.Models.User.${props.user.id}`)
+                .listen('.FriendChallengeReceived', (e) => {
+                    console.log('--- INCOMING FRIEND CHALLENGE RECEIVED ---', e);
+                    if (e && e.challengeData) {
+                        incomingChallenge.value = e.challengeData;
+                    }
+                });
+        }
     }
 
     fetchRecentOpponents();
+    fetchCategories();
 });
 
-// Helper check to verify if a user is online right now
 const isUserOnline = (userId) => {
     return onlineUsersList.value.some(u => Number(u.id) === Number(userId));
 };
 
-// 👥 Fetch Recent Opponents from Database
 const fetchRecentOpponents = async () => {
     try {
         const res = await axios.get('/api/quiz/recent-opponents');
@@ -62,24 +85,25 @@ const fetchRecentOpponents = async () => {
     }
 };
 
+const fetchCategories = async () => {
+    try {
+        isLoading.value = true;
+        const res = await axios.get('/api/quiz/categories');
+        categories.value = Array.isArray(res.data) ? res.data : res.data.categories || [];
+    } catch (err) {
+        console.error('Fetch categories error:', err);
+    } finally {
+        isLoading.value = false;
+    }
+};
+
 const isMatchReady = (resData) => {
     const status = resData?.status;
     return status === 'MATCH_FOUND' || status === 'MATCHED' || status === 'SUCCESS';
 };
 
-const openCategoryModal = async () => {
+const openCategoryModal = () => {
     showCategoryModal.value = true;
-    if (categories.value.length === 0) {
-        try {
-            isLoading.value = true;
-            const res = await axios.get('/api/quiz/categories');
-            categories.value = Array.isArray(res.data) ? res.data : res.data.categories || [];
-        } catch (err) {
-            console.error('Error loading categories:', err);
-        } finally {
-            isLoading.value = false;
-        }
-    }
 };
 
 const selectCategoryAndJoin = async (categoryId) => {
@@ -102,9 +126,54 @@ const selectCategoryAndJoin = async (categoryId) => {
             startPolling(categoryId);
         }
     } catch (err) {
-        console.error('Queue Join Error:', err);
         isWaitingOpponent.value = false;
         alert(err.response?.data?.message || 'Failed to join queue.');
+    }
+};
+
+const sendFriendChallenge = async () => {
+    if (!friendEmail.value || !selectedCategoryId.value) {
+        alert('Please provide an email and select a category.');
+        return;
+    }
+
+    showFriendBattleModal.value = false;
+    isWaitingOpponent.value = true;
+
+    try {
+        const res = await axios.post('/api/quiz/friend-challenge/send', {
+            email: friendEmail.value,
+            category_id: selectedCategoryId.value
+        });
+
+        if (res.data?.session_id) {
+            startPolling(selectedCategoryId.value);
+        }
+    } catch (err) {
+        isWaitingOpponent.value = false;
+        alert(err.response?.data?.message || 'Failed to send challenge.');
+    }
+};
+
+const respondToChallenge = async (action) => {
+    if (!incomingChallenge.value) return;
+
+    const sessionId = incomingChallenge.value.session_id;
+
+    try {
+        const res = await axios.post(`/api/quiz/friend-challenge/${sessionId}/respond`, {
+            action: action
+        });
+
+        if (action === 'accept' && res.data?.status === 'MATCH_FOUND') {
+            incomingChallenge.value = null;
+            router.visit(`/app/quiz/match/${sessionId}`);
+        } else {
+            incomingChallenge.value = null;
+        }
+    } catch (err) {
+        incomingChallenge.value = null;
+        console.error('Respond to challenge error:', err);
     }
 };
 
@@ -124,7 +193,7 @@ const startPolling = (categoryId) => {
                 router.visit(`/app/quiz/match/${sessionId}`);
             }
         } catch (err) {
-            console.error('Polling Error:', err);
+            console.error('Polling error:', err);
         }
     }, 1200);
 };
@@ -135,7 +204,7 @@ const cancelQueue = async () => {
     try {
         await axios.post('/api/quiz/cancel-queue');
     } catch (err) {
-        console.error('Cancel Queue Error:', err);
+        console.error('Cancel queue error:', err);
     }
 };
 
@@ -150,6 +219,9 @@ onUnmounted(() => {
     stopPolling();
     if (window.Echo) {
         window.Echo.leave('online-users');
+        if (props.user?.id) {
+            window.Echo.leave(`App.Models.User.${props.user.id}`);
+        }
     }
 });
 </script>
@@ -215,19 +287,19 @@ onUnmounted(() => {
             </div>
 
             <!-- Battle a Friend Card -->
-            <div class="bg-gradient-to-r from-lime-400 to-lime-300 rounded-3xl p-5 text-slate-900 shadow-lg relative overflow-hidden group cursor-pointer">
+            <div @click="showFriendBattleModal = true" class="bg-gradient-to-r from-lime-400 to-lime-300 rounded-3xl p-5 text-slate-900 shadow-lg relative overflow-hidden group cursor-pointer">
                 <div class="relative z-10 space-y-3">
                     <div>
                         <p class="text-[10px] uppercase tracking-wider font-extrabold text-slate-700">PLAY TOGETHER</p>
                         <h3 class="text-xl font-black text-slate-900">Battle a Friend</h3>
-                        <p class="text-xs text-slate-700 mt-1">Send a challenge or join with a room code.</p>
+                        <p class="text-xs text-slate-700 mt-1">Send a challenge using friend's email.</p>
                     </div>
-                    <button class="inline-flex items-center gap-1 text-xs font-black bg-slate-900 text-white px-4 py-2 rounded-xl shadow-md">Invite a Friend &rsaquo;</button>
+                    <button class="inline-flex items-center gap-1 text-xs font-black bg-slate-900 text-white px-4 py-2 rounded-xl shadow-md">Challenge Friend &rsaquo;</button>
                 </div>
                 <div class="absolute -right-2 -bottom-2 text-6xl opacity-30 group-hover:scale-110 transition-transform">👥</div>
             </div>
 
-            <!-- 👥 Real Recent Opponents Section with LIVE STATUS DOT -->
+            <!-- Recent Opponents Section -->
             <div class="space-y-3 pt-2">
                 <div class="flex justify-between items-center">
                     <span class="text-xs font-black text-slate-400 uppercase tracking-wider">Recent Battles</span>
@@ -239,12 +311,10 @@ onUnmounted(() => {
 
                 <div v-else class="grid grid-cols-2 gap-3">
                     <div v-for="opp in recentOpponents.slice(0, 2)" :key="opp.id" class="p-3 bg-white rounded-2xl border border-slate-100 flex items-center space-x-3 shadow-sm">
-                        <!-- Avatar & Status Dot -->
                         <div class="relative">
                             <div class="w-10 h-10 rounded-xl bg-indigo-600 text-white font-black text-xs flex items-center justify-center">
                                 {{ opp.avatar_text }}
                             </div>
-                            <!-- 🟢 Green Dot if Online, ⚪ Gray if Offline -->
                             <span 
                                 :class="isUserOnline(opp.id) ? 'bg-emerald-500' : 'bg-slate-300'"
                                 class="w-3 h-3 border-2 border-white rounded-full absolute -bottom-0.5 -right-0.5"
@@ -270,7 +340,7 @@ onUnmounted(() => {
             <button class="flex flex-col items-center space-y-1 text-slate-400 hover:text-indigo-600"><span class="text-lg">👤</span><span class="text-[10px] font-bold">Profile</span></button>
         </div>
 
-        <!-- CATEGORY MODAL -->
+        <!-- Category Selection Modal -->
         <div v-if="showCategoryModal" class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center">
             <div class="bg-white w-full rounded-t-3xl p-6 space-y-4 animate-in slide-in-from-bottom duration-200">
                 <div class="flex justify-between items-center">
@@ -296,18 +366,73 @@ onUnmounted(() => {
             </div>
         </div>
 
-        <!-- SEARCHING MODAL -->
+        <!-- Battle a Friend Modal -->
+        <div v-if="showFriendBattleModal" class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center">
+            <div class="bg-white w-full rounded-t-3xl p-6 space-y-4 animate-in slide-in-from-bottom duration-200">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-lg font-black text-slate-800">Battle a Friend</h3>
+                    <button @click="showFriendBattleModal = false" class="text-slate-400 hover:text-slate-600 font-bold text-sm">✕</button>
+                </div>
+
+                <div class="space-y-3">
+                    <label class="text-xs font-bold text-slate-600 block">Friend Email</label>
+                    <input 
+                        v-model="friendEmail" 
+                        type="email" 
+                        placeholder="friend@example.com" 
+                        class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-indigo-600"
+                    />
+
+                    <label class="text-xs font-bold text-slate-600 block pt-2">Select Category</label>
+                    <select 
+                        v-model="selectedCategoryId" 
+                        class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-indigo-600"
+                    >
+                        <option :value="null" disabled>Choose topic...</option>
+                        <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
+                    </select>
+
+                    <button 
+                        @click="sendFriendChallenge" 
+                        class="w-full py-3 mt-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-lg"
+                    >
+                        Send Challenge 🚀
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Incoming Challenge Modal -->
+        <div v-if="incomingChallenge" class="absolute inset-0 bg-slate-900/80 backdrop-blur-md z-50 flex items-center justify-center p-6">
+            <div class="bg-white rounded-3xl p-6 text-center space-y-4 w-full max-w-xs shadow-2xl">
+                <div class="w-16 h-16 bg-lime-100 text-lime-600 rounded-full mx-auto flex items-center justify-center text-2xl font-black">
+                    ⚔️
+                </div>
+                <div>
+                    <h3 class="text-lg font-black text-slate-800">Battle Challenge!</h3>
+                    <p class="text-xs text-slate-500 mt-1">
+                        <strong class="text-indigo-600">{{ incomingChallenge.challenger_name }}</strong> challenged you to a quiz battle!
+                    </p>
+                </div>
+                <div class="flex gap-2">
+                    <button @click="respondToChallenge('decline')" class="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-xs">Decline</button>
+                    <button @click="respondToChallenge('accept')" class="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-black text-xs shadow-md">Accept ⚔️</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Searching for Opponent Modal -->
         <div v-if="isWaitingOpponent" class="absolute inset-0 bg-slate-900/80 backdrop-blur-md z-50 flex items-center justify-center p-6">
             <div class="bg-white rounded-3xl p-6 text-center space-y-4 w-full max-w-xs shadow-2xl animate-in zoom-in-95 duration-200">
                 <div class="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full mx-auto flex items-center justify-center text-2xl font-black animate-spin">
                     ⚔️
                 </div>
                 <div>
-                    <h3 class="text-lg font-black text-slate-800">Finding Opponent...</h3>
-                    <p class="text-xs text-slate-500 mt-1">Waiting for another player to join this category.</p>
+                    <h3 class="text-lg font-black text-slate-800">Waiting for Opponent...</h3>
+                    <p class="text-xs text-slate-500 mt-1">Waiting for opponent to accept or join the game.</p>
                 </div>
                 <button @click="cancelQueue" class="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-extrabold text-xs">
-                    Cancel Search
+                    Cancel
                 </button>
             </div>
         </div>

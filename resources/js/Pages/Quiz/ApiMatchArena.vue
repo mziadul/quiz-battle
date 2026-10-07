@@ -24,72 +24,123 @@ const currentUser = ref(null);
 
 let timerInterval = null;
 let pollingInterval = null;
+let countdownInterval = null;
 
 onMounted(() => {
     const token = localStorage.getItem('auth_token');
     const storedUser = localStorage.getItem('user_data');
-    if (token) axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-    if (storedUser) currentUser.value = JSON.parse(storedUser);
+    
+    if (token) {
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    }
+    
+    if (storedUser) {
+        currentUser.value = JSON.parse(storedUser);
+    }
+
+    if (window.Echo && props.sessionId) {
+        window.Echo.private(`game-session.${props.sessionId}`)
+            .listen('.QuizMatchFinished', (e) => {
+                stopPolling();
+                if (e && e.results) {
+                    matchResult.value = e.results;
+                    isWaitingResult.value = false;
+                }
+            });
+    }
 
     fetchAndSyncMatch();
 });
 
-// 1. Fetch Questions & Sync State (With Countdown Trigger)
+// 1. Fetch Questions & Sync State
 const fetchAndSyncMatch = async () => {
     isLoading.value = true;
     try {
+        const token = localStorage.getItem('auth_token');
+        if (token) {
+            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        }
+
         const res = await axios.get(`/api/quiz/questions/${props.sessionId}`);
         
         if (res.data.status === 'SUCCESS') {
-            // ১. যদি সেশন সম্পূর্ণ শেষ হয়ে থাকে
-            if (res.data.session_status === 'completed' && res.data.results) {
-                matchResult.value = res.data.results;
-                isLoading.value = false;
+            // 🔑 ১. অপোনেন্ট এখনো একসেপ্ট না করলে 'Waiting' স্ক্রিন দেখাবে এবং কাউন্টডাউন চালু করবে না
+            if (res.data.is_waiting || res.data.session_status === 'waiting' || res.data.session_status === 'pending') {
+                isWaitingResult.value = true;
+                startPollingForOpponent();
                 return;
             }
 
-            // ২. প্রশ্ন সেভ করা
+            // ২. অপোনেন্ট জয়েন করলে পোলিং ও 'Waiting' স্ক্রিন বন্ধ
+            stopPolling();
+            isWaitingResult.value = false;
+
+            // ৩. ম্যাচ শেষ হয়ে থাকলে
+            if (res.data.session_status === 'completed' && res.data.results) {
+                matchResult.value = res.data.results;
+                return;
+            }
+
+            // ৪. প্রশ্ন সেভ করা
             questions.value = res.data.questions || [];
 
             const serverIndex = res.data.current_index ?? 0;
             const remaining = res.data.remaining_seconds ?? 10;
 
-            // ৩. নতুন সেশন (Question Index 0 এবং টাইমার 9s-এর বেশি বাকি) হলে ৩-২-১ কাউন্টডাউন চলবে
-            if (serverIndex === 0 && remaining >= 9) {
-                isLoading.value = false;
+            // 🔑 ৫. কেবল অপোনেন্ট একটিভ হওয়ার পরই ৩-২-১ কাউন্টডাউন শুরু
+            if (serverIndex === 0 && remaining >= 9 && !isGameStarted.value) {
                 startCountdown();
             } else {
-                // ম্যাচ অলরেডি রানিং থাকলে কাউন্টডাউন স্কিপ করে বর্তমান প্রশ্নে চলে যাবে
                 currentIdx.value = serverIndex;
                 timer.value = remaining;
-                isLoading.value = false;
                 isGameStarted.value = true;
                 startQuestionTimer(true, remaining);
             }
         }
     } catch (err) {
-        console.error('Fetch Questions Error:', err);
+        console.error('Fetch Questions Error:', err.response?.data || err.message);
+    } finally {
         isLoading.value = false;
     }
 };
 
-// 2. 3-2-1 Countdown Timer Sequence
+// 🔄 অপোনেন্ট জয়েন বা চ্যালেঞ্জ একসেপ্ট করার জন্য পোলিং
+const startPollingForOpponent = () => {
+    if (pollingInterval) return;
+
+    pollingInterval = setInterval(async () => {
+        try {
+            const res = await axios.get(`/api/quiz/questions/${props.sessionId}`);
+            if (res.data.status === 'SUCCESS' && !res.data.is_waiting && res.data.session_status === 'active') {
+                stopPolling();
+                fetchAndSyncMatch();
+            }
+        } catch (err) {
+            console.error('Polling Opponent Error:', err);
+        }
+    }, 1500);
+};
+
+// 2. Countdown 3-2-1 Sequence
 const startCountdown = () => {
+    if (countdownInterval) clearInterval(countdownInterval);
+
     countdown.value = 3;
     isGameStarted.value = false;
 
-    const interval = setInterval(() => {
-        if (countdown.value <= 1) {
-            clearInterval(interval);
+    countdownInterval = setInterval(() => {
+        if (countdown.value > 1) {
+            countdown.value -= 1;
+        } else {
+            clearInterval(countdownInterval);
+            countdownInterval = null;
             isGameStarted.value = true;
             startQuestionTimer(false, 10);
-        } else {
-            countdown.value--;
         }
     }, 1000);
 };
 
-// 3. Question 10s Timer
+// 3. Question Timer
 const startQuestionTimer = (isResume = false, initialTime = 10) => {
     isLocked.value = false;
     selectedOption.value = null;
@@ -102,12 +153,12 @@ const startQuestionTimer = (isResume = false, initialTime = 10) => {
             clearInterval(timerInterval);
             submitOption(null, true);
         } else {
-            timer.value--;
+            timer.value -= 1;
         }
     }, 1000);
 };
 
-// 4. Submit Single Option
+// 4. Submit Option
 const submitOption = (optKey, isTimeout = false) => {
     if (isLocked.value) return;
     isLocked.value = true;
@@ -158,21 +209,27 @@ const submitFinalAnswers = async () => {
     }
 };
 
-// 7. Polling Backup for Opponent Result
 const startPollingResult = () => {
-    if (pollingInterval) clearInterval(pollingInterval);
+    stopPolling();
     pollingInterval = setInterval(async () => {
         try {
             const res = await axios.get(`/api/quiz/questions/${props.sessionId}`);
             if (res.data.status === 'SUCCESS' && res.data.session_status === 'completed') {
-                clearInterval(pollingInterval);
+                stopPolling();
                 matchResult.value = res.data.results;
                 isWaitingResult.value = false;
             }
         } catch (err) {
-            console.error('Polling Error:', err);
+            console.error('Polling Result Error:', err);
         }
     }, 2500);
+};
+
+const stopPolling = () => {
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+    }
 };
 
 const goDashboard = () => {
@@ -181,7 +238,11 @@ const goDashboard = () => {
 
 onUnmounted(() => {
     if (timerInterval) clearInterval(timerInterval);
-    if (pollingInterval) clearInterval(pollingInterval);
+    if (countdownInterval) clearInterval(countdownInterval);
+    stopPolling();
+    if (window.Echo && props.sessionId) {
+        window.Echo.leave(`game-session.${props.sessionId}`);
+    }
 });
 </script>
 
@@ -195,6 +256,15 @@ onUnmounted(() => {
                 <p class="text-xs font-bold text-slate-400">Loading Battle Session #{{ sessionId }}...</p>
             </div>
 
+            <!-- Waiting for Opponent Screen -->
+            <div v-else-if="isWaitingResult && !matchResult" class="m-auto text-center space-y-4 bg-slate-800 border border-slate-700 p-8 rounded-3xl w-full shadow-2xl animate-in zoom-in-95 duration-200">
+                <div class="w-12 h-12 bg-indigo-500/20 text-indigo-400 rounded-full flex items-center justify-center text-xl font-bold mx-auto animate-pulse">
+                    ⚔️
+                </div>
+                <h3 class="text-lg font-black text-white">Waiting for Opponent...</h3>
+                <p class="text-xs text-slate-400">Waiting for second player to accept or join the game.</p>
+            </div>
+
             <!-- Countdown 3-2-1 Screen -->
             <div v-else-if="!isGameStarted && !matchResult" class="m-auto text-center bg-indigo-600 rounded-3xl p-10 w-full shadow-2xl animate-in zoom-in-95 duration-200">
                 <p class="text-xs font-black text-indigo-200 tracking-widest uppercase">Battle Starting In</p>
@@ -202,7 +272,7 @@ onUnmounted(() => {
             </div>
 
             <!-- Live Quiz View -->
-            <div v-else-if="questions.length > 0 && !isWaitingResult && !matchResult" class="my-auto space-y-6">
+            <div v-else-if="questions.length > 0 && !matchResult" class="my-auto space-y-6">
                 <div class="flex justify-between items-center">
                     <span class="text-xs font-black text-indigo-400 tracking-wider">⚔️ MATCH ARENA</span>
                     <span :class="timer <= 3 ? 'bg-rose-500/20 text-rose-400 border-rose-500' : 'bg-indigo-500/20 text-indigo-300 border-indigo-500'" class="px-3 py-1 rounded-full text-xs font-black border">
@@ -235,15 +305,6 @@ onUnmounted(() => {
                         </button>
                     </div>
                 </div>
-            </div>
-
-            <!-- Waiting Result -->
-            <div v-else-if="isWaitingResult && !matchResult" class="m-auto text-center space-y-4 bg-slate-800 border border-slate-700 p-8 rounded-3xl w-full">
-                <div class="w-12 h-12 bg-emerald-500/20 text-emerald-400 rounded-full flex items-center justify-center text-xl font-bold mx-auto animate-pulse">
-                    ✓
-                </div>
-                <h3 class="text-lg font-black text-white">Answers Submitted!</h3>
-                <p class="text-xs text-slate-400">Waiting for your opponent to finish...</p>
             </div>
 
             <!-- Winner Modal -->
