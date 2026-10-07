@@ -56,15 +56,25 @@ Route::get('/app/login', function () {
     return Inertia::render('Auth/ApiLogin');
 })->name('app.login');
 
-Route::get('/app/dashboard', function () {
-    return Inertia::render('Quiz/ApiDashboard');
-})->name('app.dashboard');
+// Route::get('/app/dashboard', function () {
+//     return Inertia::render('Quiz/ApiDashboard');
+// })->name('app.dashboard');
 
 // ⚔️ Match Arena View Route
+// Route::get('/app/quiz/match/{session}', function ($session) {
+//     return Inertia::render('Quiz/ApiMatchArena', [
+//         'sessionId' => (int) $session,
+//     ]);
+// })->name('app.quiz.match');
+
 Route::get('/app/quiz/match/{session}', function ($session) {
     return Inertia::render('Quiz/ApiMatchArena', [
         'sessionId' => (int) $session,
     ]);
 })->name('app.quiz.match');
+
+Route::get('/app/dashboard', function () {
+    return Inertia::render('Quiz/OnboardingDashboard');
+});
 
 require __DIR__.'/auth.php';

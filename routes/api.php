@@ -1,13 +1,12 @@
 <?php
 
+use App\Http\Controllers\Api\GameMatchController;
+use App\Http\Controllers\Api\QuizMatchController;
 use App\Models\User;
-use Illuminate\Http\Request; // <-- নিশ্চিত করুন এখানে কোনো { বা বাড়তি চিহ্ন নেই
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\Api\GameMatchController;
-use App\Http\Controllers\Api\MatchmakingController;
-use App\Http\Controllers\Api\QuizMatchController;
 
 Route::post('/login', function (Request $request) {
     $request->validate([
@@ -40,11 +39,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/match/decline', [GameMatchController::class, 'declineMatch']);
 });
 
-// Route::middleware(['auth:sanctum'])->prefix('quiz')->group(function () {
+// 🎯 Quiz Routes All Mapped to Unified QuizMatchController
 Route::middleware(['auth:sanctum'])->prefix('quiz')->group(function () {
-    Route::get('/categories', [MatchmakingController::class, 'getCategories']);
-    Route::post('/join-queue', [MatchmakingController::class, 'joinQueue']);
-    Route::post('/cancel-queue', [MatchmakingController::class, 'cancelQueue']);
+    Route::get('/categories', [QuizMatchController::class, 'getCategories']);
+    Route::post('/join-queue', [QuizMatchController::class, 'joinQueue']);
+    Route::post('/cancel-queue', [QuizMatchController::class, 'cancelQueue']);
 
     Route::get('/questions/{session}', [QuizMatchController::class, 'getMatchQuestions']);
     Route::post('/submit-answers/{session}', [QuizMatchController::class, 'submitAnswers']);
