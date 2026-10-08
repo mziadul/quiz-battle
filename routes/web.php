@@ -5,6 +5,9 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\QuizMatchController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Admin\CategoryController;
+use App\Http\Controllers\Admin\QuestionController;
+use App\Http\Controllers\Admin\UserController;
 use Inertia\Inertia;
 
 Route::get('/', function () {
@@ -32,6 +35,16 @@ Route::middleware('auth')->group(function () {
     Route::get('/quiz/match/{session}', [QuizMatchController::class, 'showMatch'])->name('quiz.match');
     Route::get('/quiz/match/{session}/questions', [QuizMatchController::class, 'getQuestions'])->name('quiz.questions');
     Route::post('/quiz/match/{session}/submit', [QuizMatchController::class, 'submitAnswers'])->name('quiz.submit');
+});
+
+Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(function (): void {
+    Route::resource('users', UserController::class)->except(['create', 'show', 'edit']);
+
+    Route::resource('categories', CategoryController::class)->except(['create', 'show', 'edit']);
+    Route::resource('questions', QuestionController::class)->except(['create', 'show', 'edit']);
+    Route::get('questions/sample-csv', [QuestionController::class, 'downloadSampleCsv'])->name('questions.sample-csv');
+    Route::post('questions/import-csv', [QuestionController::class, 'importCsv'])->name('questions.import-csv');
+    Route::resource('questions', QuestionController::class)->except(['create', 'show', 'edit']);
 });
 
 Route::middleware(['auth', 'verified'])->group(function () {
