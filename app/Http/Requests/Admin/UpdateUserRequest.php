@@ -25,7 +25,7 @@ class UpdateUserRequest extends FormRequest
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
             'password' => ['nullable', 'string', Password::defaults()],
-            'is_admin' => ['boolean'],
+            'type' => ['required', 'string', Rule::in(['player', 'admin', 'vip'])],
         ];
     }
 }

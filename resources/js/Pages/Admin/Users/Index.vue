@@ -9,6 +9,7 @@ const props = defineProps({
 });
 
 const search = ref(props.filters?.search || '');
+const selectedType = ref(props.filters?.type || '');
 const isModalOpen = ref(false);
 const editingUser = ref(null);
 
@@ -16,12 +17,13 @@ const form = useForm({
   name: '',
   email: '',
   password: '',
-  is_admin: false,
+  type: 'player',
 });
 
 const openCreateModal = () => {
   editingUser.value = null;
   form.reset();
+  form.type = 'player';
   isModalOpen.value = true;
 };
 
@@ -30,7 +32,7 @@ const openEditModal = (user) => {
   form.name = user.name;
   form.email = user.email;
   form.password = '';
-  form.is_admin = Boolean(user.is_admin);
+  form.type = user.type || 'player';
   isModalOpen.value = true;
 };
 
@@ -57,8 +59,12 @@ const deleteUser = (id) => {
   }
 };
 
-const handleSearch = () => {
-  router.get('/admin/users', { search: search.value }, { preserveState: true });
+const handleFilter = () => {
+  router.get(
+    '/admin/users',
+    { search: search.value, type: selectedType.value },
+    { preserveState: true }
+  );
 };
 </script>
 
@@ -69,7 +75,7 @@ const handleSearch = () => {
       <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 class="text-xl font-bold text-slate-800 dark:text-slate-100">Users & Subscriptions</h1>
-          <p class="text-xs text-slate-500">Manage registered players and administrative permissions</p>
+          <p class="text-xs text-slate-500">Manage registered accounts, player types, and administrative access</p>
         </div>
         <button
           @click="openCreateModal"
@@ -79,25 +85,36 @@ const handleSearch = () => {
         </button>
       </div>
 
-      <!-- Search Bar -->
-      <div class="flex items-center justify-between bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
+      <!-- Filters Bar -->
+      <div class="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
         <input
           v-model="search"
-          @input="handleSearch"
+          @input="handleFilter"
           type="text"
           placeholder="Search by name or email..."
           class="w-full sm:w-64 px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 focus:outline-none"
         />
+
+        <select
+          v-model="selectedType"
+          @change="handleFilter"
+          class="w-full sm:w-48 px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 focus:outline-none capitalize"
+        >
+          <option value="">All User Types</option>
+          <option value="player">Player</option>
+          <option value="admin">Admin</option>
+          <option value="vip">VIP</option>
+        </select>
       </div>
 
-      <!-- Table -->
+      <!-- User Table -->
       <div class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
         <table class="w-full text-left border-collapse">
           <thead>
             <tr class="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 text-[11px] font-bold text-slate-400 uppercase">
               <th class="p-4">Name</th>
               <th class="p-4">Email</th>
-              <th class="p-4">Role</th>
+              <th class="p-4">Type</th>
               <th class="p-4">Joined Date</th>
               <th class="p-4 text-right">Actions</th>
             </tr>
@@ -113,10 +130,14 @@ const handleSearch = () => {
               <td class="p-4 text-slate-500">{{ user.email }}</td>
               <td class="p-4">
                 <span
-                  :class="user.is_admin ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'"
-                  class="px-2 py-0.5 rounded-md text-[10px] font-extrabold"
+                  :class="{
+                    'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400': user.type === 'admin',
+                    'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400': user.type === 'vip',
+                    'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400': user.type === 'player'
+                  }"
+                  class="px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase"
                 >
-                  {{ user.is_admin ? 'ADMIN' : 'PLAYER' }}
+                  {{ user.type || 'player' }}
                 </span>
               </td>
               <td class="p-4 text-slate-400">{{ new Date(user.created_at).toLocaleDateString() }}</td>
@@ -153,16 +174,21 @@ const handleSearch = () => {
             </div>
 
             <div>
+              <label class="text-xs font-bold text-slate-600 dark:text-slate-400 block mb-1">User Type</label>
+              <select v-model="form.type" required class="w-full p-2.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-100 focus:outline-none capitalize">
+                <option value="player">Player</option>
+                <option value="admin">Admin</option>
+                <option value="vip">VIP</option>
+              </select>
+              <span v-if="form.errors.type" class="text-[10px] text-rose-500 mt-1 block">{{ form.errors.type }}</span>
+            </div>
+
+            <div>
               <label class="text-xs font-bold text-slate-600 dark:text-slate-400 block mb-1">
                 Password {{ editingUser ? '(Leave blank to keep unchanged)' : '' }}
               </label>
               <input v-model="form.password" type="password" :required="!editingUser" class="w-full p-2.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-100 focus:outline-none" />
               <span v-if="form.errors.password" class="text-[10px] text-rose-500 mt-1 block">{{ form.errors.password }}</span>
-            </div>
-
-            <div class="flex items-center gap-2 pt-1">
-              <input v-model="form.is_admin" type="checkbox" id="user_role" class="rounded text-indigo-600 focus:ring-0" />
-              <label for="user_role" class="text-xs font-bold text-slate-600 dark:text-slate-400">Grant Admin Permissions</label>
             </div>
 
             <div class="flex justify-end gap-2 pt-3">

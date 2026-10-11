@@ -17,11 +17,17 @@ class UserController extends Controller
     public function index(Request $request): Response
     {
         $search = $request->query('search');
+        $type = $request->query('type');
 
         $users = User::query()
             ->when($search, function ($query, $search): void {
-                $query->where('name', 'like', "%{$search}%")
-                    ->orWhere('email', 'like', "%{$search}%");
+                $query->where(function ($q) use ($search): void {
+                    $q->where('name', 'like', "%{$search}%")
+                        ->orWhere('email', 'like', "%{$search}%");
+                });
+            })
+            ->when($type, function ($query, $type): void {
+                $query->where('type', $type);
             })
             ->latest()
             ->paginate(10)
@@ -31,6 +37,7 @@ class UserController extends Controller
             'users' => $users,
             'filters' => [
                 'search' => $search,
+                'type' => $type,
             ],
         ]);
     }
