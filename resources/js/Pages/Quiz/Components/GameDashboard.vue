@@ -12,7 +12,6 @@ const emit = defineEmits(['logout']);
 const userPoints = ref(5840);
 const userLevel = ref(12);
 
-// Dynamic Reactive States
 const onlineUsersList = ref([]);
 const recentOpponents = ref([]);
 const categories = ref([]);
@@ -36,7 +35,6 @@ onMounted(() => {
     }
 
     if (window.Echo) {
-        // 🟢 Presence Channel for Online Users
         window.Echo.join('online-users')
             .here((users) => {
                 onlineUsersList.value = users;
@@ -54,11 +52,9 @@ onMounted(() => {
                 console.error('Presence Channel Error:', error);
             });
 
-        // 📩 Private Channel for Incoming Challenges
         if (props.user && props.user.id) {
             window.Echo.private(`App.Models.User.${props.user.id}`)
                 .listen('.FriendChallengeReceived', (e) => {
-                    console.log('--- INCOMING FRIEND CHALLENGE RECEIVED ---', e);
                     if (e && e.challengeData) {
                         incomingChallenge.value = e.challengeData;
                     }
@@ -97,9 +93,9 @@ const fetchCategories = async () => {
     }
 };
 
+// 🔑 ফিক্সড ম্যাচ লজিক (শুধুমাত্র MATCH_FOUND হলেই রিডাইরেক্ট)
 const isMatchReady = (resData) => {
-    const status = resData?.status;
-    return status === 'MATCH_FOUND' || status === 'MATCHED' || status === 'SUCCESS';
+    return resData?.status === 'MATCH_FOUND';
 };
 
 const openCategoryModal = () => {
@@ -195,7 +191,7 @@ const startPolling = (categoryId) => {
         } catch (err) {
             console.error('Polling error:', err);
         }
-    }, 1200);
+    }, 1500);
 };
 
 const cancelQueue = async () => {

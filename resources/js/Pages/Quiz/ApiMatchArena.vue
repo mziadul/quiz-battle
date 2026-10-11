@@ -25,6 +25,7 @@ const currentUser = ref(null);
 let timerInterval = null;
 let pollingInterval = null;
 let countdownInterval = null;
+let questionStartTime = 0; // 🔑 উত্তর দেয়ার সঠিক সময় পরিমাপের জন্য
 
 onMounted(() => {
     const token = localStorage.getItem('auth_token');
@@ -35,7 +36,11 @@ onMounted(() => {
     }
     
     if (storedUser) {
-        currentUser.value = JSON.parse(storedUser);
+        try {
+            currentUser.value = JSON.parse(storedUser);
+        } catch (e) {
+            console.error("User data parse error", e);
+        }
     }
 
     if (window.Echo && props.sessionId) {
@@ -64,30 +69,25 @@ const fetchAndSyncMatch = async () => {
         const res = await axios.get(`/api/quiz/questions/${props.sessionId}`);
         
         if (res.data.status === 'SUCCESS') {
-            // 🔑 ১. অপোনেন্ট এখনো একসেপ্ট না করলে 'Waiting' স্ক্রিন দেখাবে এবং কাউন্টডাউন চালু করবে না
             if (res.data.is_waiting || res.data.session_status === 'waiting' || res.data.session_status === 'pending') {
                 isWaitingResult.value = true;
                 startPollingForOpponent();
                 return;
             }
 
-            // ২. অপোনেন্ট জয়েন করলে পোলিং ও 'Waiting' স্ক্রিন বন্ধ
             stopPolling();
             isWaitingResult.value = false;
 
-            // ৩. ম্যাচ শেষ হয়ে থাকলে
             if (res.data.session_status === 'completed' && res.data.results) {
                 matchResult.value = res.data.results;
                 return;
             }
 
-            // ৪. প্রশ্ন সেভ করা
             questions.value = res.data.questions || [];
 
             const serverIndex = res.data.current_index ?? 0;
             const remaining = res.data.remaining_seconds ?? 10;
 
-            // 🔑 ৫. কেবল অপোনেন্ট একটিভ হওয়ার পরই ৩-২-১ কাউন্টডাউন শুরু
             if (serverIndex === 0 && remaining >= 9 && !isGameStarted.value) {
                 startCountdown();
             } else {
@@ -104,7 +104,7 @@ const fetchAndSyncMatch = async () => {
     }
 };
 
-// 🔄 অপোনেন্ট জয়েন বা চ্যালেঞ্জ একসেপ্ট করার জন্য পোলিং
+// 🔄 অপোনেন্ট জয়েন বা চ্যালেঞ্জ একসেপ্ট করার জন্য পোলিং
 const startPollingForOpponent = () => {
     if (pollingInterval) return;
 
@@ -145,6 +145,7 @@ const startQuestionTimer = (isResume = false, initialTime = 10) => {
     isLocked.value = false;
     selectedOption.value = null;
     timer.value = initialTime;
+    questionStartTime = Date.now();
 
     if (timerInterval) clearInterval(timerInterval);
 
@@ -166,12 +167,15 @@ const submitOption = (optKey, isTimeout = false) => {
 
     if (timerInterval) clearInterval(timerInterval);
 
+    // 🔑 সময় হিসেব করার সঠিক পদ্ধতি (পরিমাপ করার সময়)
+    const timeTaken = Math.min(10, Math.round((Date.now() - questionStartTime) / 1000));
+
     const currentQ = questions.value[currentIdx.value];
     if (currentQ) {
         userAnswers.value.push({
             question_id: currentQ.id,
             selected_option: optKey,
-            time_taken: 10 - timer.value
+            time_taken: timeTaken
         });
     }
 

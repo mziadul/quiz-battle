@@ -24,6 +24,7 @@ class QuizMatchController extends Controller
     {
         try {
             $categories = Category::all();
+
             return response()->json([
                 'status' => 'SUCCESS',
                 'categories' => $categories,
@@ -34,7 +35,7 @@ class QuizMatchController extends Controller
     }
 
     /**
-     * Join queue, cancel abandoned sessions, and match players cleanly.
+     * 🎮 ২. Join queue, cancel abandoned sessions, and match players cleanly with Atomic Lock.
      */
     public function joinQueue(Request $request): JsonResponse
     {
@@ -46,85 +47,90 @@ class QuizMatchController extends Controller
             $userId = (int) auth()->id();
             $categoryId = (int) $validated['category_id'];
 
-            // 🔑 ১. ইউজার আগে তৈরি করা কোনো পুরনো অকার্যকর/ফাঁকা waiting সেশন থাকলে তা বাতিল করা
-            GameSession::where('player1_id', $userId)
-                ->where('category_id', $categoryId)
-                ->where('status', 'waiting')
-                ->whereNull('player2_id')
-                ->where('created_at', '<', now()->subSeconds(30)) // ৩০ সেকেন্ডের বেশি পুরনো
-                ->update(['status' => 'cancelled']);
+            return DB::transaction(function () use ($userId, $categoryId) {
 
-            // Step 2: অলরেডি চালু থাকা active সেশন থাকলে সেটিই রিটার্ন করবে
-            $activeSession = GameSession::where('category_id', $categoryId)
-                ->where(function ($q) use ($userId) {
-                    $q->where('player1_id', $userId)->orWhere('player2_id', $userId);
-                })
-                ->where('status', 'active')
-                ->latest()
-                ->first();
+                // ১. ৩০ সেকেন্ডের পুরনো নিজের অকার্যকর/ঝুলন্ত waiting সেশন ক্যানসেল করা
+                GameSession::where('player1_id', $userId)
+                    ->where('category_id', $categoryId)
+                    ->where('status', 'waiting')
+                    ->whereNull('player2_id')
+                    ->where('created_at', '<', now()->subSeconds(30))
+                    ->update(['status' => 'cancelled']);
 
-            if ($activeSession) {
-                return response()->json([
-                    'status' => 'MATCH_FOUND',
-                    'session_id' => $activeSession->id,
-                    'message' => 'Match active! Transitioning to arena...',
+                // Step 2: অলরেডি চালু থাকা active সেশন থাকলে সেটিই ফেরত পাঠানো
+                $activeSession = GameSession::where('category_id', $categoryId)
+                    ->where('status', 'active')
+                    ->where(function ($q) use ($userId): void {
+                        $q->where('player1_id', $userId)->orWhere('player2_id', $userId);
+                    })
+                    ->latest()
+                    ->first();
+
+                if ($activeSession) {
+                    return response()->json([
+                        'status' => 'MATCH_FOUND',
+                        'session_id' => $activeSession->id,
+                        'message' => 'Match active! Transitioning to arena...',
+                    ]);
+                }
+
+                // Step 3: অন্য কারোর প্রস্তুত থাকা রিসেন্ট waiting সেশনে জয়েন করা (Atomic Lock)
+                $opponentSession = GameSession::where('category_id', $categoryId)
+                    ->where('status', 'waiting')
+                    ->where('player1_id', '!=', $userId)
+                    ->whereNull('player2_id')
+                    ->where('created_at', '>=', now()->subSeconds(45))
+                    ->lockForUpdate() // 🔑 একই সাথে একাধিক প্লেয়ার জয়েন করা রূদ্ধ করা
+                    ->latest()
+                    ->first();
+
+                if ($opponentSession) {
+                    $opponentSession->update([
+                        'player2_id' => $userId,
+                        'status' => 'active',
+                        'started_at' => now(),
+                    ]);
+
+                    $this->assignQuestionsToSession($opponentSession->id, $categoryId);
+
+                    return response()->json([
+                        'status' => 'MATCH_FOUND',
+                        'session_id' => $opponentSession->id,
+                        'message' => 'Opponent found! Starting match...',
+                    ]);
+                }
+
+                // Step 4: নিজের রিসেন্ট waiting সেশন থাকলে সেটিই ফেরত পাঠানো
+                $myWaitingSession = GameSession::where('category_id', $categoryId)
+                    ->where('player1_id', $userId)
+                    ->where('status', 'waiting')
+                    ->whereNull('player2_id')
+                    ->latest()
+                    ->first();
+
+                if ($myWaitingSession) {
+                    return response()->json([
+                        'status' => 'WAITING',
+                        'session_id' => $myWaitingSession->id,
+                        'message' => 'Searching for an opponent...',
+                    ]);
+                }
+
+                // Step 5: নতুন waiting সেশন তৈরি
+                $newSession = GameSession::create([
+                    'category_id' => $categoryId,
+                    'player1_id' => $userId,
+                    'status' => 'waiting',
                 ]);
-            }
 
-            // Step 3: অন্য কারোর প্রস্তুত থাকা সর্বশেষ waiting সেশনে জয়েন করা
-            $opponentSession = GameSession::where('category_id', $categoryId)
-                ->where('status', 'waiting')
-                ->where('player1_id', '!=', $userId)
-                ->whereNull('player2_id')
-                ->latest()
-                ->first();
+                $this->assignQuestionsToSession($newSession->id, $categoryId);
 
-            if ($opponentSession) {
-                $opponentSession->update([
-                    'player2_id' => $userId,
-                    'status' => 'active',
-                    'started_at' => now(),
-                ]);
-
-                $this->assignQuestionsToSession($opponentSession->id, $categoryId);
-
-                return response()->json([
-                    'status' => 'MATCH_FOUND',
-                    'session_id' => $opponentSession->id,
-                    'message' => 'Opponent found! Starting match...',
-                ]);
-            }
-
-            // Step 4: নিজের একটিমাত্র রিসেন্ট waiting সেশন থাকলে সেটিই ফেরত পাঠানো
-            $myWaitingSession = GameSession::where('category_id', $categoryId)
-                ->where('player1_id', $userId)
-                ->where('status', 'waiting')
-                ->whereNull('player2_id')
-                ->latest()
-                ->first();
-
-            if ($myWaitingSession) {
                 return response()->json([
                     'status' => 'WAITING',
-                    'session_id' => $myWaitingSession->id,
+                    'session_id' => $newSession->id,
                     'message' => 'Searching for an opponent...',
                 ]);
-            }
-
-            // Step 5: নতুন সেশন তৈরি
-            $newSession = GameSession::create([
-                'category_id' => $categoryId,
-                'player1_id' => $userId,
-                'status' => 'waiting',
-            ]);
-
-            $this->assignQuestionsToSession($newSession->id, $categoryId);
-
-            return response()->json([
-                'status' => 'WAITING',
-                'session_id' => $newSession->id,
-                'message' => 'Searching for an opponent...',
-            ]);
+            });
 
         } catch (Exception $e) {
             Log::error('JoinQueue Error: '.$e->getMessage());
@@ -159,11 +165,12 @@ class QuizMatchController extends Controller
     }
 
     /**
-     * Get match questions and calculate elapsed match time.
+     * ⏱️ ৪. প্রশ্ন লোড করা ও টাইম-সিঙ্ক করা
      */
     public function getMatchQuestions(int $sessionId): JsonResponse
     {
         try {
+            $userId = (int) auth()->id();
             $session = GameSession::find($sessionId);
 
             if (! $session) {
@@ -171,6 +178,14 @@ class QuizMatchController extends Controller
                     'status' => 'ERROR',
                     'message' => 'Session not found.',
                 ], 404);
+            }
+
+            // 🔑 সিকিউরিটি: এই সেশনের প্লেয়ার না হলে অ্যাক্সেস ব্লক
+            if ((int) $session->player1_id !== $userId && (int) $session->player2_id !== $userId) {
+                return response()->json([
+                    'status' => 'ERROR',
+                    'message' => 'Unauthorized access to this session.',
+                ], 403);
             }
 
             if ($session->status === 'completed') {
@@ -185,7 +200,7 @@ class QuizMatchController extends Controller
                 ]);
             }
 
-            // 🔑 অপোনেন্ট জয়েন না করলে (waiting/pending বা null player2_id) কাউন্টডাউন বন্ধ রাখতে বলা
+            // অপোনেন্ট জয়েন না করলে কাউন্টডাউন বন্ধ রাখা
             if (! $session->started_at || ! $session->player2_id || in_array($session->status, ['waiting', 'pending'], true)) {
                 return response()->json([
                     'status' => 'SUCCESS',
@@ -197,8 +212,9 @@ class QuizMatchController extends Controller
 
             $startedAt = \Carbon\Carbon::parse($session->started_at);
             $elapsedSeconds = (int) $startedAt->diffInSeconds(now());
-            $totalMatchTime = 50;
+            $totalMatchTime = 50; // ৫টি প্রশ্ন × ১০ সেকেন্ড = ৫০ সেকেন্ড মোট টাইম
 
+            // ৫০ সেকেন্ড পার হয়ে গেলে ম্যাচ শেষ
             if ($elapsedSeconds >= $totalMatchTime) {
                 if ($session->player1_score > $session->player2_score) {
                     $session->winner_id = $session->player1_id;
@@ -209,6 +225,7 @@ class QuizMatchController extends Controller
                 }
 
                 $session->status = 'completed';
+                $session->ended_at = now();
                 $session->save();
 
                 return response()->json([
@@ -222,6 +239,7 @@ class QuizMatchController extends Controller
                 ]);
             }
 
+            // 🔑 সময় সিঙ্ক করার সঠিক ফর্মুলা (Syntax Error Fixed)
             $questionIndex = (int) floor($elapsedSeconds / 10);
             $remainingSecForCurrentQ = 10 - ($elapsedSeconds % 10);
 
@@ -267,9 +285,26 @@ class QuizMatchController extends Controller
     {
         try {
             $session = GameSession::findOrFail($sessionId);
-            $userId = auth()->id();
-            $answers = $request->input('answers', []);
+            $userId = (int) auth()->id();
 
+            if ((int) $session->player1_id !== $userId && (int) $session->player2_id !== $userId) {
+                return response()->json(['status' => 'ERROR', 'message' => 'Unauthorized action.'], 403);
+            }
+
+            // 🔑 ডুপ্লিকেট সাবমিশন রোধ
+            $alreadySubmitted = DB::table('game_answers')
+                ->where('game_session_id', $sessionId)
+                ->where('user_id', $userId)
+                ->exists();
+
+            if ($alreadySubmitted) {
+                return response()->json([
+                    'status' => 'ALREADY_SUBMITTED',
+                    'message' => 'You have already submitted answers for this match.',
+                ]);
+            }
+
+            $answers = $request->input('answers', []);
             $totalScore = 0;
 
             foreach ($answers as $ans) {
@@ -296,13 +331,14 @@ class QuizMatchController extends Controller
                 ]);
             }
 
-            if ((int) $session->player1_id === (int) $userId) {
+            if ((int) $session->player1_id === $userId) {
                 $session->player1_score = $totalScore;
             } else {
                 $session->player2_score = $totalScore;
             }
             $session->save();
 
+            // দুজন প্লেয়ারের উত্তর শেষ হলে বিজয়ী নির্ধারণ
             if (! is_null($session->player1_score) && ! is_null($session->player2_score)) {
 
                 if ($session->player1_score > $session->player2_score) {
@@ -326,7 +362,7 @@ class QuizMatchController extends Controller
                 try {
                     broadcast(new QuizMatchFinishedEvent($session->id, $resultData));
                 } catch (Exception $e) {
-                    Log::error('Result Broadcast Error: ' . $e->getMessage());
+                    Log::error('Result Broadcast Error: '.$e->getMessage());
                 }
 
                 return response()->json([
@@ -341,7 +377,8 @@ class QuizMatchController extends Controller
             ]);
 
         } catch (Exception $e) {
-            Log::error('SubmitAnswers Error: ' . $e->getMessage());
+            Log::error('SubmitAnswers Error: '.$e->getMessage());
+
             return response()->json(['status' => 'ERROR', 'message' => $e->getMessage()], 500);
         }
     }
@@ -369,29 +406,31 @@ class QuizMatchController extends Controller
         }
     }
 
+    /**
+     * 👥 রিসেন্ট অপোনেন্ট লিস্ট
+     */
     public function getRecentOpponents(Request $request): JsonResponse
     {
         try {
             $userId = auth()->id();
 
-            // ইউজার যে যে সেশনে প্লেয়ার ১ বা ২ ছিল সেগুলো থেকে অপোনেন্ট আইডি বের করা
-            $sessions = GameSession::where(function ($q) use ($userId) {
+            $sessions = GameSession::where(function ($q) use ($userId): void {
                 $q->where('player1_id', $userId)->orWhere('player2_id', $userId);
             })
-            ->whereNotNull('player2_id')
-            ->latest('updated_at')
-            ->limit(20)
-            ->get();
+                ->whereNotNull('player2_id')
+                ->latest('updated_at')
+                ->limit(20)
+                ->get();
 
             $opponentIds = [];
             foreach ($sessions as $session) {
                 $oppId = ($session->player1_id == $userId) ? $session->player2_id : $session->player1_id;
-                if ($oppId && !in_array($oppId, $opponentIds)) {
+                if ($oppId && ! in_array($oppId, $opponentIds)) {
                     $opponentIds[] = $oppId;
                 }
             }
 
-            $opponents = \App\Models\User::whereIn('id', array_slice($opponentIds, 0, 5))
+            $opponents = User::whereIn('id', array_slice($opponentIds, 0, 5))
                 ->select('id', 'name', 'email')
                 ->get()
                 ->map(function ($u) {
@@ -404,7 +443,7 @@ class QuizMatchController extends Controller
 
             return response()->json([
                 'status' => 'SUCCESS',
-                'opponents' => $opponents
+                'opponents' => $opponents,
             ]);
         } catch (Exception $e) {
             return response()->json(['status' => 'ERROR', 'message' => $e->getMessage()], 500);
@@ -412,21 +451,20 @@ class QuizMatchController extends Controller
     }
 
     /**
-     * Send a direct battle challenge to a user by email.
+     * ✉️ ফ্রেন্ড চ্যালেঞ্জ পাঠানো
      */
     public function sendFriendChallenge(Request $request): JsonResponse
     {
         try {
-            $validated = $request->validate([
+            $validated =$request->validate([
                 'email' => ['required', 'email'],
                 'category_id' => ['required', 'integer', 'exists:categories,id'],
             ]);
 
-            /** @var \App\Models\User $currentUser */
-            $currentUser = auth()->user();
-            $userId = $currentUser->id;
+            /** @var User $currentUser */$currentUser = auth()->user();
+            $userId =$currentUser->id;
 
-            $targetUser = User::where('email', $validated['email'])->first();
+            $targetUser = User::where('email',$validated['email'])->first();
 
             if (! $targetUser) {
                 return response()->json([
@@ -435,7 +473,7 @@ class QuizMatchController extends Controller
                 ], 404);
             }
 
-            if ($targetUser->id === $userId) {
+            if ($targetUser->id ===$userId) {
                 return response()->json([
                     'status' => 'ERROR',
                     'message' => 'You cannot challenge yourself.',
@@ -449,7 +487,7 @@ class QuizMatchController extends Controller
                 'status' => 'pending',
             ]);
 
-            $this->assignQuestionsToSession($session->id, (int) $validated['category_id']);
+            $this->assignQuestionsToSession($session->id, (int)$validated['category_id']);
 
             try {
                 broadcast(new BattleChallengeEvent($targetUser->id, [
@@ -477,27 +515,25 @@ class QuizMatchController extends Controller
     }
 
     /**
-     * Respond to an incoming friend battle challenge.
+     * 📩 ফ্রেন্ড চ্যালেঞ্জের রেসপন্স
      */
-    public function respondFriendChallenge(Request $request, int $sessionId): JsonResponse
+    public function respondFriendChallenge(Request $request, int$sessionId): JsonResponse
     {
         try {
-            $validated = $request->validate([
+            $validated =$request->validate([
                 'action' => ['required', 'string', 'in:accept,decline'],
             ]);
 
-            $session = GameSession::findOrFail($sessionId);
-            $userId = auth()->id();
+            $session = GameSession::findOrFail($sessionId);$userId = auth()->id();
 
-            if ((int) $session->player2_id !== (int) $userId) {
+            if ((int) $session->player2_id !== (int)$userId) {
                 return response()->json([
                     'status' => 'ERROR',
                     'message' => 'Unauthorized action.',
                 ], 403);
             }
 
-            if ($validated['action'] === 'accept') {
-                $session->update([
+            if ($validated['action'] === 'accept') {$session->update([
                     'status' => 'active',
                     'started_at' => now(),
                 ]);
