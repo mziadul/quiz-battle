@@ -45,25 +45,10 @@ pipeline {
 
 
         stage('3. Run Automated Tests') {
-
             steps {
-
                 echo 'কন্টেইনারের ভেতরে Laravel টেস্ট চালানো হচ্ছে...'
-
-                sh """
-
-                    docker run --rm \
-
-                    -e APP_ENV=testing \
-
-                    -e APP_KEY=base64:2fl+Ktvkfl+Fuz4Qp/A75G2RTiWVA/ZoKZvp6fiiM10= \
-
-                    ${IMAGE_NAME}:${IMAGE_TAG} php artisan test
-
-                """
-
+                sh "docker run --rm -e APP_ENV=testing -e APP_KEY=base64:2fl+Ktvkfl+Fuz4Qp/A75G2RTiWVA/ZoKZvp6fiiM10= ${IMAGE_NAME}:${IMAGE_TAG} php artisan test"
             }
-
         }
 
 
